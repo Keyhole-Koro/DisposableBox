@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QHBoxLayout, QWidget, QFileDialog, QTextEdit
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QHBoxLayout, QWidget, QFileDialog, QTextEdit, QMessageBox
 import docker
 
 class CreateContainerDialog(QDialog):
@@ -128,6 +128,11 @@ class CreateContainerDialog(QDialog):
         dockerfile_group.setLayout(dockerfile_layout)
         main_layout.addWidget(dockerfile_group)
         
+        # Container cards
+        self.container_cards = QVBoxLayout()
+        main_layout.addLayout(self.container_cards)
+        self.refresh_container_cards()
+        
         # Buttons
         button_widget = QWidget()
         button_layout = QHBoxLayout(button_widget)
@@ -138,6 +143,7 @@ class CreateContainerDialog(QDialog):
         
         button_layout.addWidget(create_btn)
         button_layout.addWidget(cancel_btn)
+        
         main_layout.addWidget(button_widget)
         
         # Initialize version combo
@@ -231,3 +237,74 @@ class CreateContainerDialog(QDialog):
             image = f"{image_type}:{version}"
         
         return name, image, None, False
+
+    def refresh_container_cards(self):
+        # Clear existing cards
+        for i in reversed(range(self.container_cards.count())):
+            widget = self.container_cards.itemAt(i).widget()
+            if widget is not None:
+                widget.deleteLater()
+        
+        # Add container cards
+        for container in self.client.containers.list(all=True):
+            card_widget = QWidget()
+            card_layout = QHBoxLayout(card_widget)
+            
+            name_label = QLabel(container.name)
+            card_layout.addWidget(name_label)
+            
+            edit_btn = QPushButton("Edit")
+            edit_btn.setFixedWidth(60)
+            edit_btn.clicked.connect(lambda _, c=container: self.edit_container(c))
+            card_layout.addWidget(edit_btn)
+            
+            stop_btn = QPushButton("Stop")
+            stop_btn.setFixedWidth(60)
+            stop_btn.setStyleSheet("background-color: yellow;")
+            stop_btn.clicked.connect(lambda _, c=container: self.stop_container(c.name))
+            card_layout.addWidget(stop_btn)
+            
+            delete_btn = QPushButton("Delete")
+            delete_btn.setFixedWidth(60)
+            delete_btn.setStyleSheet("background-color: red; color: white;")
+            delete_btn.clicked.connect(lambda _, c=container: self.delete_container(c.name))
+            card_layout.addWidget(delete_btn)
+            
+            self.container_cards.addWidget(card_widget)
+            self.container_cards.update()
+
+    def edit_container(self, container):
+        # Logic to edit container
+        pass
+
+    def delete_container(self, container_name=None):
+        if container_name is None:
+            container_name = self.name_input.text()
+        if container_name:
+            try:
+                container = self.client.containers.get(container_name)
+                container.remove(force=True)
+                QMessageBox.information(self, "Success", f"Container '{container_name}' deleted successfully.")
+                self.refresh_container_cards()
+            except docker.errors.NotFound:
+                QMessageBox.warning(self, "Error", f"Container '{container_name}' not found.")
+            except docker.errors.APIError as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete container '{container_name}': {e}")
+        else:
+            QMessageBox.warning(self, "Error", "Please enter the container name to delete.")
+
+    def stop_container(self, container_name=None):
+        if container_name is None:
+            container_name = self.name_input.text()
+        if container_name:
+            try:
+                container = self.client.containers.get(container_name)
+                container.stop()
+                QMessageBox.information(self, "Success", f"Container '{container_name}' stopped successfully.")
+                self.refresh_container_cards()
+            except docker.errors.NotFound:
+                QMessageBox.warning(self, "Error", f"Container '{container_name}' not found.")
+            except docker.errors.APIError as e:
+                QMessageBox.critical(self, "Error", f"Failed to stop container '{container_name}': {e}")
+        else:
+            QMessageBox.warning(self, "Error", "Please enter the container name to stop.")

@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy, QPushButton, QInputDialog
+from PyQt5.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy, QPushButton, QInputDialog, QMessageBox
 from PyQt5.QtGui import QFontMetrics, QColor
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
@@ -110,16 +110,16 @@ class ContainerCard(QFrame):
         status_layout = QHBoxLayout(status_container)
         status_layout.setContentsMargins(0, 0, 0, 0)
         
-        status_label = QLabel(self.container.status.upper())
-        status_label.setObjectName("statusLabel")
+        self.status_label = QLabel(self.container.status.upper())
+        self.status_label.setObjectName("statusLabel")
         status_color = "#28a745" if self.container.status == "running" else "#dc3545"
-        status_label.setStyleSheet(f"""
+        self.status_label.setStyleSheet(f"""
             QLabel#statusLabel {{
                 background-color: {status_color};
             }}
         """)
         status_layout.addStretch()
-        status_layout.addWidget(status_label)
+        status_layout.addWidget(self.status_label)
         status_layout.addStretch()
         layout.addWidget(status_container)
         
@@ -131,6 +131,11 @@ class ContainerCard(QFrame):
         
         # Buttons for actions
         self.button_layout = QHBoxLayout()
+
+        self.action_btn = QPushButton("Stop")
+        self.action_btn.setFixedWidth(50)  # Set fixed width to shorten the button
+        self.action_btn.clicked.connect(self.toggle_container_state)
+        self.button_layout.addWidget(self.action_btn)
         
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.clicked.connect(self.delete_container)
@@ -151,8 +156,66 @@ class ContainerCard(QFrame):
     def set_edit_mode(self, edit_mode):
         self.delete_btn.setVisible(edit_mode)
         self.snapshot_btn.setVisible(edit_mode)
+        self.action_btn.setVisible(not edit_mode)
         self.button_layout.setSpacing(10 if edit_mode else 0)
         self.button_layout.setContentsMargins(0, 0, 0, 0 if edit_mode else 10)
+
+    def toggle_container_state(self):
+        try:
+            client = docker.from_env()
+            container = client.containers.get(self.container.id)
+            
+            if container.status == "running":
+                # Log that stopping is in progress
+                self.main_window.log_panel.add_log(
+                    "Stopping Container",
+                    f"Stopping container: {container.name} is in progress.",
+                    "Info"
+                )
+                
+                container.stop()
+                self.main_window.log_panel.add_log(
+                    "Container Stopped",
+                    f"Stopped container: {container.name}",
+                    "Success"
+                )
+                self.update_status("exited")
+            else:
+                # Log that starting is in progress
+                self.main_window.log_panel.add_log(
+                    "Starting Container",
+                    f"Starting container: {container.name} is in progress.",
+                    "Info"
+                )
+                
+                container.start()
+                self.main_window.log_panel.add_log(
+                    "Container Started",
+                    f"Started container: {container.name}",
+                    "Success"
+                )
+                self.update_status("running")
+                
+            self.main_window.refresh_containers()
+        except Exception as e:
+            error_msg = f"Error toggling container state: {str(e)}"
+            print(error_msg)
+            self.main_window.log_panel.add_log(
+                "Container State Toggle",
+                error_msg,
+                "Error"
+            )
+
+    def update_status(self, status):
+        status_color = "#28a745" if status == "running" else "#dc3545"
+        self.status_label.setText(status.upper())
+        self.status_label.setStyleSheet(f"""
+            QLabel#statusLabel {{
+                background-color: {status_color};
+            }}
+        """)
+        self.action_btn.setText("Stop" if status == "running" else "Start")
+        self.action_btn.repaint()  # Explicitly repaint the button to ensure the text is updated
 
     def delete_container(self):
         try:
