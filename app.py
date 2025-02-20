@@ -3,7 +3,7 @@ import os
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea, QFrame, QGroupBox, QLineEdit, QComboBox, QDialog, QCheckBox, QLayout, QTreeWidget, QTreeWidgetItem, QToolBar, QAction, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QScrollArea, QFrame, QGroupBox, QLineEdit, QComboBox, QDialog, QCheckBox, QLayout, QTreeWidget, QTreeWidgetItem, QToolBar, QAction, QWidget, QInputDialog  # Ensure QWidget is imported
 from PyQt5.QtCore import Qt, QTimer, QSize, QThread, pyqtSignal, QPropertyAnimation, QPoint, QEasingCurve, QRect, QDateTime
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QPixmap
 import docker
@@ -13,14 +13,14 @@ from typing import Optional
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import qDebug
 
-from settings import Settings
-from async_worker import AsyncWorker
-from iso_manager import ISOManager
-from notification import NotificationManager
-from log_panel import LogPanel
-from container_card import ContainerCard
-from create_container_dialog import CreateContainerDialog
-from qflow_layout import QFlowLayout
+from backend.settings import Settings
+from backend.async_worker import AsyncWorker
+from backend.iso_manager import ISOManager
+from frontend.notification import NotificationManager
+from frontend.log_panel import LogPanel
+from frontend.container_card import ContainerCard
+from frontend.create_container_dialog import CreateContainerDialog
+from frontend.qflow_layout import QFlowLayout
 
 # Modern style sheet
 STYLE_SHEET = """
@@ -40,6 +40,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Docker Container Manager")
         self.workers = []
         self.client = docker.from_env()
+        self.snapshots = {}  # Initialize snapshots attribute
+        self.workspace_dir = os.path.join(os.path.expanduser("~"), "docker_workspace")
+        os.makedirs(self.workspace_dir, exist_ok=True)  # Create workspace directory
         
         # Initialize debug tools
         self.setup_debug()
@@ -111,7 +114,7 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(10)
         
-        # Header with create button
+        # Header with create and edit buttons
         header_layout = QHBoxLayout()
         header_label = QLabel("Containers")
         header_label.setStyleSheet("""
@@ -138,6 +141,26 @@ class MainWindow(QMainWindow):
             }
         """)
         header_layout.addWidget(create_btn)
+
+        edit_btn = QPushButton("Edit Containers")
+        edit_btn.setIcon(QIcon(":/icons/edit.png"))
+        edit_btn.setCheckable(True)
+        edit_btn.toggled.connect(self.toggle_edit_mode)
+        edit_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffc107;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #e0a800;
+            }
+        """)
+        header_layout.addWidget(edit_btn)
+
         left_layout.addLayout(header_layout)
         
         # Container scroll area
@@ -172,6 +195,12 @@ class MainWindow(QMainWindow):
         # Initial container refresh
         self.refresh_containers()
 
+    def toggle_edit_mode(self, edit_mode):
+        for i in range(self.container_layout.count()):
+            item = self.container_layout.itemAt(i)
+            if item and item.widget():
+                item.widget().set_edit_mode(edit_mode)
+
     def create_container(self):
         try:
             print("Opening create container dialog...")
@@ -179,19 +208,32 @@ class MainWindow(QMainWindow):
             dialog.setMinimumWidth(500)  # Set minimum dialog width
             
             if dialog.exec_() == QDialog.Accepted:
-                name, image = dialog.get_container_info()
-                print(f"Creating container with name: {name}, image: {image}")
+                name, image_or_dockerfile, dockerfile_content, is_dockerfile = dialog.get_container_info()
+                print(f"Creating container with name: {name}, image_or_dockerfile: {image_or_dockerfile}, is_dockerfile: {is_dockerfile}")
                 
                 self.log_panel.add_log(
                     "Container Creation",
-                    f"Pulling image: {image}",
+                    f"Pulling image or building from Dockerfile: {image_or_dockerfile}",
                     "In Progress"
                 )
                 
                 try:
-                    # Pull the image
-                    print(f"Pulling image: {image}")
-                    self.client.images.pull(image)
+                    if is_dockerfile:
+                        if dockerfile_content:
+                            # Save Dockerfile content to a temporary file
+                            dockerfile_path = os.path.join(self.workspace_dir, "Dockerfile")
+                            with open(dockerfile_path, 'w') as file:
+                                file.write(dockerfile_content)
+                            image_or_dockerfile = dockerfile_path
+                        
+                        # Build the image from Dockerfile
+                        image, _ = self.client.images.build(path=os.path.dirname(image_or_dockerfile), dockerfile=image_or_dockerfile)
+                    else:
+                        # Pull the image if it's not a snapshot
+                        if image_or_dockerfile not in self.snapshots:
+                            print(f"Pulling image: {image_or_dockerfile}")
+                            self.client.images.pull(image_or_dockerfile)
+                        image = image_or_dockerfile
                     
                     # Generate container name if not provided
                     if not name:
@@ -210,10 +252,15 @@ class MainWindow(QMainWindow):
                         name=name,
                         tty=True,
                         stdin_open=True,
-                        detach=True
+                        detach=True,
+                        volumes={os.path.join(self.workspace_dir, name): {'bind': '/workspace', 'mode': 'rw'}}
                     )
                     
                     print(f"Container created successfully: {container.id}")
+                    
+                    # Create workspace directory for the container
+                    container_workspace = os.path.join(self.workspace_dir, name)
+                    os.makedirs(container_workspace, exist_ok=True)
                     
                     self.log_panel.add_log(
                         "Container Creation",

@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QHBoxLayout
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGroupBox, QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QHBoxLayout, QWidget, QFileDialog, QTextEdit
 import docker
 
 class CreateContainerDialog(QDialog):
@@ -103,6 +103,31 @@ class CreateContainerDialog(QDialog):
         snapshot_group.setLayout(snapshot_layout)
         main_layout.addWidget(snapshot_group)
         
+        # Dockerfile option
+        dockerfile_group = QGroupBox("Dockerfile")
+        dockerfile_layout = QVBoxLayout()
+        self.dockerfile_check = QCheckBox("Use Dockerfile")
+        self.dockerfile_check.stateChanged.connect(self.toggle_dockerfile)
+        dockerfile_layout.addWidget(self.dockerfile_check)
+        
+        self.dockerfile_input = QLineEdit()
+        self.dockerfile_input.setPlaceholderText("Select Dockerfile")
+        self.dockerfile_input.setEnabled(False)
+        dockerfile_layout.addWidget(self.dockerfile_input)
+        
+        self.dockerfile_btn = QPushButton("Browse")
+        self.dockerfile_btn.setEnabled(False)
+        self.dockerfile_btn.clicked.connect(self.browse_dockerfile)
+        dockerfile_layout.addWidget(self.dockerfile_btn)
+        
+        self.dockerfile_text = QTextEdit()
+        self.dockerfile_text.setPlaceholderText("Or enter Dockerfile content here")
+        self.dockerfile_text.setEnabled(False)
+        dockerfile_layout.addWidget(self.dockerfile_text)
+        
+        dockerfile_group.setLayout(dockerfile_layout)
+        main_layout.addWidget(dockerfile_group)
+        
         # Buttons
         button_widget = QWidget()
         button_layout = QHBoxLayout(button_widget)
@@ -167,11 +192,35 @@ class CreateContainerDialog(QDialog):
         self.custom_check.setEnabled(not state)
         self.custom_input.setEnabled(not state and self.custom_check.isChecked())
 
+    def toggle_dockerfile(self, state):
+        self.dockerfile_input.setEnabled(state)
+        self.dockerfile_btn.setEnabled(state)
+        self.dockerfile_text.setEnabled(state)
+        self.image_type.setEnabled(not state)
+        self.version_combo.setEnabled(not state)
+        self.custom_check.setEnabled(not state)
+        self.custom_input.setEnabled(not state and self.custom_check.isChecked())
+        self.snapshot_check.setEnabled(not state)
+        self.snapshot_combo.setEnabled(not state and self.snapshot_check.isChecked())
+
+    def browse_dockerfile(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Dockerfile", "", "Dockerfile (*.dockerfile);;All Files (*)", options=options)
+        if file_path:
+            self.dockerfile_input.setText(file_path)
+            with open(file_path, 'r') as file:
+                self.dockerfile_text.setPlainText(file.read())
+
     def get_container_info(self):
         name = self.name_input.text() if self.name_input.text() else None
         
+        if self.dockerfile_check.isChecked():
+            dockerfile_path = self.dockerfile_input.text()
+            dockerfile_content = self.dockerfile_text.toPlainText()
+            return name, dockerfile_path, dockerfile_content, True
+        
         if self.snapshot_check.isChecked():
-            image = self.parent.snapshots[self.snapshot_combo.currentData()].id
+            image = self.snapshot_combo.currentData()
         elif self.custom_check.isChecked() and self.custom_input.text():
             image = self.custom_input.text()
         else:
@@ -181,4 +230,4 @@ class CreateContainerDialog(QDialog):
             version = self.version_combo.currentText()
             image = f"{image_type}:{version}"
         
-        return name, image
+        return name, image, None, False

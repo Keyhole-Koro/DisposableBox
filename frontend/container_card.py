@@ -1,11 +1,11 @@
-from PyQt5.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy
+from PyQt5.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy, QPushButton, QInputDialog
 from PyQt5.QtGui import QFontMetrics, QColor
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 import docker
 import subprocess
 import time
-import sys  # Add this import
+import sys
 
 class ElidedLabel(QLabel):
     def __init__(self, text, parent=None):
@@ -13,10 +13,11 @@ class ElidedLabel(QLabel):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.setWordWrap(False)
         self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet("padding-left: 10px;")  # Add padding to the left
     
     def resizeEvent(self, event):
         fm = QFontMetrics(self.font())
-        elided_text = fm.elidedText(self.text(), Qt.ElideRight, self.width())
+        elided_text = fm.elidedText(self.text(), Qt.ElideRight, self.width() - 20)  # Adjust width for padding
         self.setText(elided_text)
         super().resizeEvent(event)
 
@@ -27,7 +28,7 @@ class ContainerCard(QFrame):
         self.main_window = main_window
         
         # Set fixed size for larger square appearance
-        self.setFixedSize(250, 250)
+        self.setFixedSize(250, 300)
         
         # Modern styling with square design
         self.setStyleSheet("""
@@ -46,8 +47,10 @@ class ContainerCard(QFrame):
                 background-color: transparent;
             }
             QLabel#nameLabel {
+                text-indent: 0;
                 font-size: 16px;
                 font-weight: bold;
+                padding: 20px 10px;
             }
             QLabel#idLabel {
                 color: #6c757d;
@@ -60,8 +63,19 @@ class ContainerCard(QFrame):
             QLabel#statusLabel {
                 color: white;
                 border-radius: 12px;
-                padding: 13px 20px;
+                padding: 16px 20px;
                 font-size: 14px;
+            }
+            QPushButton {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 5px 10px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #0056b3;
             }
         """)
         
@@ -115,8 +129,72 @@ class ContainerCard(QFrame):
         image_label.setObjectName("imageLabel")
         layout.addWidget(image_label)
         
+        # Buttons for actions
+        self.button_layout = QHBoxLayout()
+        
+        self.delete_btn = QPushButton("Delete")
+        self.delete_btn.clicked.connect(self.delete_container)
+        self.button_layout.addWidget(self.delete_btn)
+        
+        self.snapshot_btn = QPushButton("Snapshot")
+        self.snapshot_btn.clicked.connect(self.snapshot_container)
+        self.button_layout.addWidget(self.snapshot_btn)
+        
+        layout.addLayout(self.button_layout)
+        
         # Add stretch at the bottom
         layout.addStretch()
+
+        # Hide buttons initially
+        self.set_edit_mode(False)
+
+    def set_edit_mode(self, edit_mode):
+        self.delete_btn.setVisible(edit_mode)
+        self.snapshot_btn.setVisible(edit_mode)
+        self.button_layout.setSpacing(10 if edit_mode else 0)
+        self.button_layout.setContentsMargins(0, 0, 0, 0 if edit_mode else 10)
+
+    def delete_container(self):
+        try:
+            client = docker.from_env()
+            container = client.containers.get(self.container.id)
+            container.remove(force=True)
+            self.main_window.log_panel.add_log(
+                "Container Deletion",
+                f"Deleted container: {container.name}",
+                "Success"
+            )
+            self.main_window.refresh_containers()
+        except Exception as e:
+            error_msg = f"Error deleting container: {str(e)}"
+            print(error_msg)
+            self.main_window.log_panel.add_log(
+                "Container Deletion",
+                error_msg,
+                "Error"
+            )
+
+    def snapshot_container(self):
+        try:
+            image_name, ok = QInputDialog.getText(self, 'Snapshot', 'Enter new image name:')
+            if ok and image_name:
+                client = docker.from_env()
+                container = client.containers.get(self.container.id)
+                snapshot = container.commit(repository=image_name)
+                self.main_window.snapshots[snapshot.id] = snapshot
+                self.main_window.log_panel.add_log(
+                    "Snapshot",
+                    f"Created snapshot for container: {container.name} as image: {image_name}",
+                    "Success"
+                )
+        except Exception as e:
+            error_msg = f"Error creating snapshot: {str(e)}"
+            print(error_msg)
+            self.main_window.log_panel.add_log(
+                "Snapshot",
+                error_msg,
+                "Error"
+            )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
