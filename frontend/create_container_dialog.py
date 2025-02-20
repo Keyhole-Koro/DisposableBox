@@ -128,11 +128,6 @@ class CreateContainerDialog(QDialog):
         dockerfile_group.setLayout(dockerfile_layout)
         main_layout.addWidget(dockerfile_group)
         
-        # Container cards
-        self.container_cards = QVBoxLayout()
-        main_layout.addLayout(self.container_cards)
-        self.refresh_container_cards()
-        
         # Buttons
         button_widget = QWidget()
         button_layout = QHBoxLayout(button_widget)

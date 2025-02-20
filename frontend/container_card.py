@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QWidget, QSizePolicy, QPushButton, QInputDialog, QMessageBox
 from PyQt5.QtGui import QFontMetrics, QColor
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 import docker
 import subprocess
@@ -131,9 +131,10 @@ class ContainerCard(QFrame):
         
         # Buttons for actions
         self.button_layout = QHBoxLayout()
-
-        self.action_btn = QPushButton("Stop")
-        self.action_btn.setFixedWidth(50)  # Set fixed width to shorten the button
+                
+        self.action_btn = QPushButton("Stop" if self.container.status == "running" else "Start")
+        self.action_btn.setFixedHeight(30)
+        self.action_btn.setFixedWidth(60)
         self.action_btn.clicked.connect(self.toggle_container_state)
         self.button_layout.addWidget(self.action_btn)
         
@@ -161,53 +162,26 @@ class ContainerCard(QFrame):
         self.button_layout.setContentsMargins(0, 0, 0, 0 if edit_mode else 10)
 
     def toggle_container_state(self):
-        try:
-            client = docker.from_env()
-            container = client.containers.get(self.container.id)
-            
-            if container.status == "running":
-                # Log that stopping is in progress
-                self.main_window.log_panel.add_log(
-                    "Stopping Container",
-                    f"Stopping container: {container.name} is in progress.",
-                    "Info"
-                )
-                
-                container.stop()
-                self.main_window.log_panel.add_log(
-                    "Container Stopped",
-                    f"Stopped container: {container.name}",
-                    "Success"
-                )
-                self.update_status("exited")
-            else:
-                # Log that starting is in progress
-                self.main_window.log_panel.add_log(
-                    "Starting Container",
-                    f"Starting container: {container.name} is in progress.",
-                    "Info"
-                )
-                
-                container.start()
-                self.main_window.log_panel.add_log(
-                    "Container Started",
-                    f"Started container: {container.name}",
-                    "Success"
-                )
-                self.update_status("running")
-                
-            self.main_window.refresh_containers()
-        except Exception as e:
-            error_msg = f"Error toggling container state: {str(e)}"
-            print(error_msg)
-            self.main_window.log_panel.add_log(
-                "Container State Toggle",
-                error_msg,
-                "Error"
-            )
+        self.action_btn.setEnabled(False)  # Disable the button while updating state
+        self.action_btn.setStyleSheet("background-color: #003166;")  # Change color to indicate loading
+
+        self.thread = QThread()
+        self.worker = ContainerStateWorker(self.container.id)
+        self.worker.moveToThread(self.thread)
+        
+        self.thread.started.connect(self.worker.run)
+        self.worker.finished.connect(self.thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self.thread.deleteLater)
+        
+        self.worker.status_updated.connect(self.update_status)
+        self.worker.log_message.connect(self.log_message)
+        
+        self.thread.start()
 
     def update_status(self, status):
         status_color = "#28a745" if status == "running" else "#dc3545"
+
         self.status_label.setText(status.upper())
         self.status_label.setStyleSheet(f"""
             QLabel#statusLabel {{
@@ -215,7 +189,13 @@ class ContainerCard(QFrame):
             }}
         """)
         self.action_btn.setText("Stop" if status == "running" else "Start")
+        self.action_btn.setEnabled(True)  # Re-enable the button after updating state
+        self.action_btn.setStyleSheet("background-color: #007bff;")  # Change color to indicate loading
+
         self.action_btn.repaint()  # Explicitly repaint the button to ensure the text is updated
+
+    def log_message(self, title, message, level):
+        self.main_window.log_panel.add_log(title, message, level)
 
     def delete_container(self):
         try:
@@ -354,3 +334,34 @@ class ContainerCard(QFrame):
         except Exception as e:
             print(f"Error detecting shell: {str(e)}, defaulting to /bin/sh")
             return '/bin/sh'
+
+class ContainerStateWorker(QObject):
+    finished = pyqtSignal()
+    status_updated = pyqtSignal(str)
+    log_message = pyqtSignal(str, str, str)
+
+    def __init__(self, container_id):
+        super().__init__()
+        self.container_id = container_id
+
+    def run(self):
+        try:
+            client = docker.from_env()
+            container = client.containers.get(self.container_id)
+            
+            if container.status == "running":
+                self.log_message.emit("Stopping Container", f"Stopping container: {container.name} is in progress.", "Info")
+                container.stop()
+                self.log_message.emit("Container Stopped", f"Stopped container: {container.name}", "Success")
+                self.status_updated.emit("exited")
+            else:
+                self.log_message.emit("Starting Container", f"Starting container: {container.name} is in progress.", "Info")
+                container.start()
+                self.log_message.emit("Container Started", f"Started container: {container.name}", "Success")
+                self.status_updated.emit("running")
+        except Exception as e:
+            error_msg = f"Error toggling container state: {str(e)}"
+            print(error_msg)
+            self.log_message.emit("Container State Toggle", error_msg, "Error")
+        finally:
+            self.finished.emit()
